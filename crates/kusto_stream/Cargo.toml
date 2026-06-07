@@ -1,0 +1,31 @@
+[package]
+name = "kusto_stream"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kusto_stream_macros.workspace = true
+
+azure_core.workspace = true
+azure_identity.workspace = true
+bytes.workspace = true
+chrono = { workspace = true, features = ["serde", "std"] }
+memchr.workspace = true
+regex.workspace = true
+reqwest = { workspace = true, features = ["brotli", "gzip", "json"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+# Enables `Deserialize` for `azure_core::Uuid` (re-exported as `KustoGuid`) via
+# feature unification; azure_core itself only pulls uuid with the `v4` feature.
+uuid = { workspace = true, features = ["serde"] }
+
+[dev-dependencies]
+anyhow.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tracing-subscriber = { workspace = true, features = ["env-filter", "std"] }
