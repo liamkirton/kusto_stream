@@ -5,7 +5,7 @@ mod row;
 mod scalar;
 mod state;
 
-pub use client::Client;
+pub use client::{Client, QueryResult};
 pub use error::Error;
 pub use row::KustoRow;
 pub use scalar::KustoScalar;
