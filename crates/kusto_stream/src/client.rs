@@ -1,4 +1,7 @@
-use std::{fmt::Debug, sync::Arc, sync::LazyLock};
+use std::{
+    fmt::Debug,
+    sync::{Arc, LazyLock},
+};
 
 use azure_core::{
     credentials::{AccessToken, TokenCredential},
@@ -11,9 +14,14 @@ use regex::Regex;
 use reqwest::Response;
 use serde::Deserialize;
 use serde_json::json;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
-use crate::{Error, KustoRow, frames::KustoResponseV2, state::KustoResponseState};
+use crate::{
+    KustoRow,
+    error::{Error, parse_kusto_error},
+    frames::KustoResponseV2,
+    state::KustoResponseState,
+};
 
 const CLUSTER_SUFFIX: &str = ".kusto.windows.net";
 
@@ -27,8 +35,18 @@ pub struct Client {
     token: Option<Arc<AccessToken>>,
 }
 
+pub struct QueryResult {
+    pub success: bool,
+    pub error: Option<String>,
+
+    pub bytes: usize,
+    pub rows: usize,
+}
+
 struct ResponseParser {
     state: KustoResponseState,
+    error: Option<String>,
+    bytes: usize,
     rows: usize,
     frame_accumulator: BytesMut,
     frame_accumulator_scanned: usize,
@@ -56,7 +74,7 @@ impl Client {
         db: &str,
         kql: &str,
         row_handler: &mut C,
-    ) -> Result<bool, Error>
+    ) -> Result<QueryResult, Error>
     where
         R: Debug + for<'a> Deserialize<'a> + KustoRow,
         C: FnMut(Vec<R>),
@@ -91,8 +109,25 @@ impl Client {
             .send()
             .await?;
 
-        self.parse_response::<R, C>(&mut response, row_handler)
-            .await
+        let status = response.status();
+
+        if status.is_success() {
+            self.parse_response::<R, C>(&mut response, row_handler)
+                .await
+        } else {
+            let response_text = &response.text().await?;
+            let error = match serde_json::from_str(response_text) {
+                Ok(error_json) => Error::General {
+                    error: parse_kusto_error(&error_json),
+                },
+                Err(_) => Error::General {
+                    error: format!("Unexpected Error Response: {response_text}"),
+                },
+            };
+            error!("Response: {}", status);
+            error!("Error: {}", error);
+            Err(error)
+        }
     }
 
     async fn get_token(&mut self) -> Result<Arc<AccessToken>, Error> {
@@ -131,7 +166,7 @@ impl Client {
         &self,
         response: &mut Response,
         row_handler: &mut C,
-    ) -> Result<bool, Error>
+    ) -> Result<QueryResult, Error>
     where
         R: Debug + for<'a> Deserialize<'a> + KustoRow,
         C: FnMut(Vec<R>),
@@ -140,7 +175,15 @@ impl Client {
         while let Some(response_chunk) = response.chunk().await? {
             response_parser.process_chunk(&response_chunk, row_handler)?;
         }
-        response_parser.process_tail()
+
+        let success = response_parser.process_tail()?;
+
+        Ok(QueryResult {
+            success,
+            error: response_parser.error,
+            bytes: response_parser.bytes,
+            rows: response_parser.rows,
+        })
     }
 }
 
@@ -148,6 +191,8 @@ impl ResponseParser {
     fn new() -> Self {
         Self {
             state: KustoResponseState::New,
+            error: None,
+            bytes: 0,
             rows: 0,
             frame_accumulator: BytesMut::new(),
             frame_accumulator_scanned: 0,
@@ -159,6 +204,7 @@ impl ResponseParser {
         R: Debug + for<'a> Deserialize<'a> + KustoRow,
         C: FnMut(Vec<R>),
     {
+        self.bytes += chunk.len();
         self.frame_accumulator.put_slice(chunk);
 
         // Rely on 'results_v2_newlines_between_frames' behaviour: "... }\n,{ ..."
@@ -270,6 +316,11 @@ impl ResponseParser {
                     KustoResponseState::Complete
                 } else {
                     debug!("Query Execution With Errors");
+                    if let Some(errors) = completion.one_api_errors
+                        && let Some(error) = errors.first()
+                    {
+                        self.error = Some(parse_kusto_error(error));
+                    }
                     KustoResponseState::CompleteWithErrors
                 }
             }

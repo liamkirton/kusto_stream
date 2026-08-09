@@ -13,7 +13,7 @@
 use anyhow::Result;
 use azure_identity::DeveloperToolsCredential;
 use serde::Deserialize;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 use kusto_stream::{Client, KustoDateTime, KustoDynamic, KustoRow};
@@ -56,20 +56,24 @@ async fn main() -> Result<()> {
 
     let cluster = "help.kusto.windows.net";
     let db = "Samples";
-    let kql = "StormEvents | take 1";
+    let kql = "StormEvents";
 
     info!("Querying '{}/{}'...", cluster, db);
 
     let mut client = Client::new(cluster, Some(DeveloperToolsCredential::new(None)?))?;
 
-    let mut row_count = 0;
-    client
-        .query::<Row, _>(db, kql, &mut |rows: Vec<Row>| {
-            row_count += rows.len();
-        })
+    let result = client
+        .query::<Row, _>(db, kql, &mut |_rows: Vec<Row>| {})
         .await?;
 
-    info!("Query Complete! Got {} Rows", row_count);
+    if let Some(error) = result.error {
+        warn!("Query Error: {}", error);
+    }
+
+    info!(
+        "Query Complete! Got {} Rows, {} Bytes",
+        result.rows, result.bytes
+    );
 
     Ok(())
 }
