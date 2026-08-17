@@ -81,8 +81,8 @@ impl Client {
     {
         let request_client = reqwest::Client::builder()
             .brotli(true)
-            .gzip(false)
             .deflate(false)
+            .gzip(true)
             .build()?;
 
         let token = self.get_token().await?;
